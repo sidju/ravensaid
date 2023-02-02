@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     // First layer takes up to 32 bytes of utf-8, giving out 128 values.
     .add(linear(vs.root() / "l1", INPUT_SIZE, HIDDEN_SIZE, Default::default()))
     // Second layer keeps width, adding some more processing potential.
-//    .add(linear(vs.root() / "l2", HIDDEN_SIZE, HIDDEN_SIZE, Default::default()))
+    .add(linear(vs.root() / "l2", HIDDEN_SIZE, HIDDEN_SIZE, Default::default()))
     // Third layer tries to boil it all down into one value, the one we want
     .add(linear(vs.root() / "l3", HIDDEN_SIZE, 1, Default::default()))
   ;
@@ -63,11 +63,13 @@ fn main() -> Result<()> {
 
     for k in data.keys() {
       let correct = data.get(k).unwrap();
-      println!("\n\nIt currently crashes right after here\n\n");
       let predicted = layers.forward(&sentence_to_tensor(k).to_device(device));
-      let loss = predicted.view([1])
-        .binary_cross_entropy::<Tensor>(
-          &bool_to_tensor(*correct).to_device(device).view([1]),
+      predicted.print();
+      println!("Shape of predicted: {:?}", predicted.size());
+      let loss = predicted
+        .binary_cross_entropy_with_logits::<Tensor>(
+          &bool_to_tensor(*correct).to_device(device),
+          None,
           None,
           Reduction::Mean,
         )
@@ -77,8 +79,8 @@ fn main() -> Result<()> {
       cnt_loss += 1.;
     }
     println!("Epoch: {}, loss: {}", epoch, sum_loss / cnt_loss);
-    test(&layers);
   }
+  test(&layers);
 
   Ok(())
 }
@@ -95,10 +97,10 @@ fn sentence_to_tensor(s: &str) -> Tensor {
 }
 fn bool_to_tensor(b: bool) -> Tensor {
   let tmp: [f64; 1] = [if b { 1. } else { 0. }];
-  Tensor::of_slice(&tmp[..]).to_kind(Kind::Int64)
+  Tensor::of_slice(&tmp[..]).to_kind(Kind::Float)
 }
 
-fn test(layers: &Sequential) {
+fn test(layers: &dyn Module) {
   let tests = std::collections::HashMap::from([
     ("That plot twist.", true),
     ("all according to keikaku", false),
@@ -106,7 +108,7 @@ fn test(layers: &Sequential) {
 
   for key in tests.keys() {
     let tmp = layers.forward(&sentence_to_tensor(key));
-    let out = tmp.double_value(&[1]);
+    let out = f64::from(tmp);
     println!(
       "Tested on \"{}\", correct answer is {}, NN gave {}",
       key,
