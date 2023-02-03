@@ -1,27 +1,20 @@
 use anyhow::Result;
-use tch::{nn, Device, Kind, Tensor, Reduction};
-use tch::nn::{Module, linear, seq, Adam, OptimizerConfig};
+use tch::{Device, Kind, Tensor, Reduction};
+use tch::nn::{Module, linear, seq, Adam, OptimizerConfig, VarStore};
 
-// With one hidden layer, learning rate 0.00001 learning works well but is quite
-// slow, seems to flatten out around 78 but takes a while to get there
-// With one hidden layer, learning rate 0.00002 still learns well but stops
-// improving around improving around 77.50%
-// With one hidden layer, learning rate 0.0001 it learns more first epoch and
-// stops improving around 76.30%
-const LEARNING_RATE_1: f64 = 0.000010;
-const LEARNING_RATE_2: f64 = 0.000003;
-const LEARNING_RATE_3: f64 = 0.000001;
+const LEARNING_RATE_1: f64 = 0.000005;
+const LEARNING_RATE_2: f64 = 0.000001;
 const INPUT_BYTES: i64 = 32;
 // A float for every permutation of every byte
 const INPUT_SIZE: i64 = INPUT_BYTES * 256;
 // One float per input character seems reasonable
-const HIDDEN_SIZE: i64 = 32;
-const EPOCHS: i64 = 99;
+const HIDDEN_SIZE: i64 = 64;
+const EPOCHS: i64 = 100;
 
 fn main() -> Result<()> {
   // Create device connection and a variable store on it
   let device = Device::cuda_if_available();
-  let mut vs = nn::VarStore::new(device);
+  let mut vs = VarStore::new(device);
   // Prepare computations by defining the neural network
   let layers = seq()
     // First layer takes the input and compresses it down to a manageable size
@@ -31,78 +24,115 @@ fn main() -> Result<()> {
     // Third layer tries to boil it all down into one value, the one we want
     .add(linear(vs.root() / "l3", HIDDEN_SIZE, 1, Default::default()))
   ;
-
-  let train = true;
+  
   // Either load trained network or train and output a network
-  if train {
-    // Read in the training data
-    // Just read it into memory
-    let mut data = Vec::<(&str, bool)>::new();
-    use std::fs::read_to_string;
-    let berk = read_to_string("data/berk.txt")?;
-    let raven = read_to_string("data/ravenholdt.txt")?;
-    let dreamer = read_to_string("data/dreamer.txt")?;
-    let sidju = read_to_string("data/sidju.txt")?;
-  
-    // Chain sidju with berk, since they are both shorter than raven
-    let mut bi = berk.split("\n\n").chain(sidju.split("\n\n"));
-    let mut ri = raven.split("\n\n");
-    let mut di = dreamer.split("\n\n");
-  
-    // For each raven quote add one other quote after, to balance the learning
-    loop {
-      // Take one sentence from each until one is empty
-      if let Some(s) = bi.next() {
-        data.push((s, false));
+  let mut args = std::env::args();
+  args.next(); // Throw away our executable's name
+  match args.next().as_ref().map(|s| &s[..]) {
+    Some("train") => train_nn(&layers, &mut vs, device, args.next().unwrap_or(String::new()))?,
+    Some("run") => {
+      if let Some(s) = args.next() {
+        vs.load(s)?;
+        run_nn_on_input(&layers)?;
       }
-      else { break; }
-      if let Some(s) = ri.next() {
-        data.push((s, true));
+      else {
+        eprintln!("You must give path to the model to run.");
       }
-      else { break; }
-      if let Some(s) = di.next() {
-        data.push((s, false));
-      }
-      else { break; }
     }
-    println!("Added {} sentences to train on.", data.len());
-  
-  
-    // Training
-    let mut optimiser = Adam::default().build(&vs, LEARNING_RATE_1)?;
-    for epoch in 0..EPOCHS {
-      if epoch == 2*EPOCHS/3 { optimiser.set_lr(LEARNING_RATE_2); }
-      if epoch == EPOCHS/3 { optimiser.set_lr(LEARNING_RATE_3); }
-      let mut sum_loss = 0.;
-      let mut cnt_loss = 0.;
-  
-      for (k,v) in &data {
-        let predicted = layers.forward(&sentence_to_tensor(k).to_device(device));
-        let loss = predicted
-          .binary_cross_entropy_with_logits::<Tensor>(
-            &bool_to_tensor(*v).to_device(device),
-            None,
-            None,
-            Reduction::Mean,
-          )
-        ;
-        // Clipping argument 0.5 should be fine
-        optimiser.backward_step_clip(&loss, 0.5 as f64);
-        sum_loss += f64::from(loss);
-        cnt_loss += 1.;
-      }
-      println!("Epoch: {}, loss: {}", epoch, sum_loss / cnt_loss);
-      test(&layers, &data);
-    }
-    // Write out the trained values to a file
-    vs.save("./trained_network.nn")?;
-  }
-  // Else, load the trained network from file
-  else {
-    // Read in the trained values from a file
-    vs.load("./trained_network.nn")?;
+    None | Some(_) => {
+      println!("You need to give a command. Either 'run' or 'train'.");
+    },
   }
 
+  Ok(())
+}
+
+fn train_nn<M: Module>(layers: &M, vs: &mut VarStore, device: Device, prefix: String) -> Result<()> {
+  // Read in the training data
+  // Just read it into memory
+  let mut data = Vec::<(&str, bool)>::new();
+  use std::fs::read_to_string;
+  let berk = read_to_string("data/berk.txt")?;
+  let raven = read_to_string("data/ravenholdt.txt")?;
+  let dreamer = read_to_string("data/dreamer.txt")?;
+  let sidju = read_to_string("data/sidju.txt")?;
+
+  // Chain sidju with berk, since they are both shorter than raven
+  let mut bi = berk.split("\n\n").chain(sidju.split("\n\n"));
+  let mut ri = raven.split("\n\n");
+  let mut di = dreamer.split("\n\n");
+
+  // For each raven quote add one other quote after, to balance the learning
+  loop {
+    // Take one sentence from each until one is empty
+    if let Some(s) = bi.next() {
+      data.push((s, false));
+    }
+    else { break; }
+    if let Some(s) = ri.next() {
+      data.push((s, true));
+    }
+    else { break; }
+    if let Some(s) = di.next() {
+      data.push((s, false));
+    }
+    else { break; }
+  }
+  let training_data = data.split_off(data.len() / 5);
+  let validation_data = data;
+  println!("Added {} sentences to train on and {} to validate with.",
+    training_data.len(),
+    validation_data.len(),
+  );
+
+  // Training
+  let mut optimiser = Adam::default().build(&vs, LEARNING_RATE_1)?;
+  for epoch in 0..EPOCHS {
+    if epoch == EPOCHS / 2 { optimiser.set_lr(LEARNING_RATE_2); }
+    let mut sum_loss = 0.;
+    let mut cnt_loss = 0.;
+
+    // Calculate selection to train on
+    let len = training_data.len() / 10;
+    let starting_point = (epoch as usize % 10) * len;
+
+    for (k,v) in &training_data[starting_point .. starting_point + len] {
+      let predicted = layers.forward(&sentence_to_tensor(k).to_device(device));
+      let loss = predicted
+        .binary_cross_entropy_with_logits::<Tensor>(
+          &bool_to_tensor(*v).to_device(device),
+          None,
+          None,
+          Reduction::Mean,
+        )
+      ;
+      // Clipping argument 0.5 should be fine
+      optimiser.backward_step_clip(&loss, 0.5 as f64);
+      sum_loss += f64::from(loss);
+      cnt_loss += 1.;
+    }
+    println!("Prefix: {}, epoch: {}, loss: {}", prefix, epoch, sum_loss / cnt_loss);
+    test(layers, &validation_data);
+    vs.save(format!("./{prefix}epoch_{epoch}.nn"))?;
+  }
+  // Write out the trained values to a file
+  Ok(())
+}
+
+fn run_nn_on_input<M: Module>(layers: &M) -> Result<()> {
+  println!("Enter messages to estimate likelyhood that Raven said:");
+  let stdin = std::io::stdin();
+  loop {
+    let mut input_line = String::new();
+    let read = stdin.read_line(&mut input_line)?;
+    if read == 0 { continue; }
+    input_line.pop(); // Get rid of newline
+    if &input_line == "exit" { break; }
+
+    let tmp = layers.forward(&sentence_to_tensor(&input_line));
+    let result = f64::from(tmp.sigmoid()) * 100.;
+    println!("Likelyhood that raven said ^: {:.2}%", result);
+  }
   Ok(())
 }
 
@@ -121,7 +151,7 @@ fn bool_to_tensor(b: bool) -> Tensor {
   let tmp: [f64; 1] = [if b { 1. } else { 0. }];
   Tensor::of_slice(&tmp[..]).to_kind(Kind::Float)
 }
-fn test(layers: &dyn Module, data: &Vec<(&str, bool)>) {
+fn test(layers: &dyn Module, data: &[(&str, bool)]) {
   let mut successes = 0;
   let mut tests = 0;
 
