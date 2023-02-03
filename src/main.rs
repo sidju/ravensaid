@@ -6,7 +6,7 @@ const LEARNING_RATE: f64 = 0.01;
 const INPUT_BYTES: i64 = 32;
 // A float for every permutation of every byte
 const INPUT_SIZE: i64 = INPUT_BYTES * 256;
-const HIDDEN_SIZE: i64 = 128 * 256;
+const HIDDEN_SIZE: i64 = 32;
 const EPOCHS: i64 = 100;
 
 fn main() -> Result<()> {
@@ -88,7 +88,9 @@ fn sentence_to_tensor(s: &str) -> Tensor {
 //  Tensor::of_slice(&s[ .. s.len().min(INPUT_SIZE as usize)].as_bytes())
   let mut tmp: Vec<f64> = Vec::new();
   tmp.resize_with(INPUT_SIZE as usize, || 0.0);
-  for (i, b) in (&s[..s.len().min(INPUT_BYTES as usize)]).bytes().enumerate() {
+  let bytes = s.bytes();
+  for (i, b) in bytes.enumerate() {
+    if i >= 32 { break; }
     tmp[i * 256 + b as usize] = 1.0;
   }
   Tensor::of_slice(&tmp[..]).to_kind(Kind::Float)
