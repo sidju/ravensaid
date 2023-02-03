@@ -6,6 +6,7 @@ const LEARNING_RATE: f64 = 0.01;
 const INPUT_BYTES: i64 = 32;
 // A float for every permutation of every byte
 const INPUT_SIZE: i64 = INPUT_BYTES * 256;
+// One float per input character seems reasonable
 const HIDDEN_SIZE: i64 = 32;
 const EPOCHS: i64 = 100;
 
@@ -47,9 +48,9 @@ fn main() -> Result<()> {
   let vs = nn::VarStore::new(device);
   // Prepare computations by defining the neural network
   let layers = seq()
-    // First layer takes up to 32 bytes of utf-8, giving out 128 values.
+    // First layer takes the input and compresses it down to a manageable size
     .add(linear(vs.root() / "l1", INPUT_SIZE, HIDDEN_SIZE, Default::default()))
-    // Second layer keeps width, adding some more processing potential.
+    // Second layer takes the compressed data and tries to process it
     .add(linear(vs.root() / "l2", HIDDEN_SIZE, HIDDEN_SIZE, Default::default()))
     // Third layer tries to boil it all down into one value, the one we want
     .add(linear(vs.root() / "l3", HIDDEN_SIZE, 1, Default::default()))
@@ -85,7 +86,6 @@ fn main() -> Result<()> {
 
 fn sentence_to_tensor(s: &str) -> Tensor {
   // Write up to 32 bytes to a Tensor
-//  Tensor::of_slice(&s[ .. s.len().min(INPUT_SIZE as usize)].as_bytes())
   let mut tmp: Vec<f64> = Vec::new();
   tmp.resize_with(INPUT_SIZE as usize, || 0.0);
   let bytes = s.bytes();
