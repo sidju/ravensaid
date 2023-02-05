@@ -3,8 +3,12 @@ name = "ravensaid"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["staticlib"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tch = "*"
+tch = "0.10.1"
 anyhow = "*"
+libc = "*"
